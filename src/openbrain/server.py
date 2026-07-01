@@ -1,11 +1,15 @@
-"""Open Brain MCP server (Streamable HTTP) + a small REST API for automation.
+"""Open Brain MCP server (FastMCP v3, Streamable HTTP) + a small REST API.
 
 MCP tools (capture/search/list/supersede/forget/stats/verify) are for AI clients
-(Claude Code, Desktop, ...). The REST routes (/capture, /search, /health) are for
-deterministic automation such as Claude Code hooks, which can't do an MCP
-handshake with curl. Both go through the same service layer.
+(Claude Code, Desktop, claude.ai). The REST routes (/capture, /search, /health)
+are for deterministic automation such as the Claude Code auto-capture hook, which
+can't do an MCP handshake. Both go through the same service layer.
+
+Auth: when GOOGLE_CLIENT_ID/SECRET are configured, /mcp is protected by Google
+OAuth (FastMCP GoogleProvider) — required for claude.ai. When unset, /mcp is open
+(local-only behaviour). The REST routes are separately gated by OPENBRAIN_TOKEN.
 """
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -21,13 +25,22 @@ INSTRUCTIONS = (
     "fact changes rather than adding a contradicting one."
 )
 
-mcp = FastMCP(
-    "openbrain",
-    instructions=INSTRUCTIONS,
-    host=config.MCP_HOST,
-    port=config.MCP_PORT,
-    stateless_http=True,
-)
+
+def _build_auth():
+    """Google OAuth provider when configured, else None (open /mcp)."""
+    if not (config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET):
+        return None
+    from fastmcp.server.auth.providers.google import GoogleProvider
+    return GoogleProvider(
+        client_id=config.GOOGLE_CLIENT_ID,
+        client_secret=config.GOOGLE_CLIENT_SECRET,
+        base_url=config.OAUTH_BASE_URL,
+        redirect_path=config.OAUTH_REDIRECT_PATH,
+        required_scopes=["openid", "email", "profile"],
+    )
+
+
+mcp = FastMCP("openbrain", instructions=INSTRUCTIONS, auth=_build_auth())
 
 
 # ---------------------------------------------------------------------------
@@ -47,11 +60,9 @@ async def capture_thought(
     """Save a thought to the Open Brain (embeds it + stores with provenance).
 
     Write a clear, self-contained statement that will make sense when retrieved
-    later with zero prior context. `source` = where it came from (e.g.
-    'claude.ai memory', a project name, 'weekly-review'); `origin_tool` = which
-    AI/tool wrote it. Type/people/topics/date are auto-extracted by a local
-    model unless you pass them or set skip_extraction=true. `event_date` must be
-    'YYYY-MM-DD'.
+    later with zero prior context. `source` = where it came from; `origin_tool` =
+    which AI/tool wrote it. Type/people/topics/date are auto-extracted by a local
+    model unless you pass them or set skip_extraction=true. `event_date` = 'YYYY-MM-DD'.
     """
     return await service.capture(
         text=text, source=source, origin_tool=origin_tool, type=type,
@@ -72,8 +83,8 @@ async def search_thought(
     """Search the Open Brain by meaning (cosine similarity).
 
     Returns the most relevant stored thoughts with a similarity score (0-1) and
-    provenance. Use this to answer questions from the user's own memory. If the
-    result list is empty, nothing relevant is stored — do NOT fabricate.
+    provenance. If the result list is empty, nothing relevant is stored — do NOT
+    fabricate.
     """
     return await service.search(
         query=query, limit=limit, min_similarity=min_similarity,
@@ -90,19 +101,15 @@ async def list_thoughts(
 ) -> dict:
     """List thoughts captured in the last `days` days (default 7), newest first.
 
-    Intended for the weekly review. Uses server time; reports the window and
-    count so you can tell the user exactly what was analysed.
+    For the weekly review. Uses server time; reports the window and count.
     """
     rows = await db.list_recent(days=days, limit=limit, person=person, type=type)
     truncated = len(rows) >= limit
     return {
-        "ok": True,
-        "days": days,
-        "count": len(rows),
-        "truncated": truncated,
+        "ok": True, "days": days, "count": len(rows), "truncated": truncated,
         "note": (
             f"Active thoughts from the last {days} days (server time), newest first"
-            + (f"; hit the {limit}-row limit — older items in the window are not shown."
+            + (f"; hit the {limit}-row limit — older items not shown."
                if truncated else ".")
         ),
         "results": rows,
@@ -118,9 +125,9 @@ async def supersede_thought(
 ) -> dict:
     """Replace an outdated thought with a corrected one.
 
-    Saves `new_text` as a new thought, marks `old_id` as superseded (kept for
-    history), and links them. Use when a fact changed ('X moved to Y', 'now uses
-    Z instead') instead of leaving two contradictory thoughts in the store.
+    Saves `new_text` as a new thought, marks `old_id` superseded (kept for
+    history), and links them. Use when a fact changed instead of leaving two
+    contradictory thoughts.
     """
     new_text = (new_text or "").strip()
     if not new_text:
@@ -161,18 +168,17 @@ async def verify_connection() -> dict:
     found = any(r["id"] == wrote["id"] for r in got["results"])
     await db.hard_delete(wrote["id"])
     return {
-        "ok": found,
-        "wrote_id": wrote["id"],
-        "found_in_search": found,
-        "embed_model": config.EMBED_MODEL,
-        "embed_dim": config.EMBED_DIM,
+        "ok": found, "wrote_id": wrote["id"], "found_in_search": found,
+        "embed_model": config.EMBED_MODEL, "embed_dim": config.EMBED_DIM,
         "message": "Round-trip OK — capture, embed, store, and search all work."
         if found else "Wrote a canary but could not retrieve it — check search/index.",
     }
 
 
 # ---------------------------------------------------------------------------
-# REST API (for deterministic automation: hooks, scripts)
+# REST API (for the auto-capture hook / scripts). Gated by OPENBRAIN_TOKEN when
+# set — required once the server is exposed publicly, since these are not behind
+# the OAuth flow that protects /mcp.
 # ---------------------------------------------------------------------------
 def _authorized(request: Request) -> bool:
     if not config.API_TOKEN:
@@ -184,7 +190,8 @@ def _authorized(request: Request) -> bool:
 async def http_health(request: Request) -> JSONResponse:
     return JSONResponse(
         {"ok": True, "service": "openbrain", "embed_model": config.EMBED_MODEL,
-         "embed_dim": config.EMBED_DIM}
+         "embed_dim": config.EMBED_DIM,
+         "oauth": bool(config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET)}
     )
 
 
@@ -226,7 +233,7 @@ async def http_search(request: Request) -> JSONResponse:
 
 
 def main() -> None:
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="http", host=config.MCP_HOST, port=config.MCP_PORT, path="/mcp")
 
 
 if __name__ == "__main__":

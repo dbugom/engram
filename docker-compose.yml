@@ -1,16 +1,14 @@
 services:
+  # LOCAL server — OPEN (no auth), bound to localhost. Used by local Claude Code
+  # and the auto-capture hook. This is your original, frictionless local setup.
   openbrain-mcp:
     build: .
     image: openbrain-mcp
     container_name: openbrain-mcp
-    # Bind to localhost only. The Cloudflare tunnel (later) points at this port;
-    # it is NOT exposed on your LAN/public interface until you set that up.
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      # Supabase local Postgres lives on the host at :54322.
       DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:54422/postgres
-      # Ollama runs natively on the host (Metal-accelerated).
       OLLAMA_URL: http://host.docker.internal:11434
       EMBED_MODEL: qwen3-embedding:4b
       EXTRACT_MODEL: qwen3:4b
@@ -22,17 +20,32 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # Optional dashboard-managed Cloudflare tunnel — exposes the MCP server on a
-  # public HTTPS hostname so remote clients (Claude Code elsewhere, claude.ai)
-  # can reach it. Opt-in: only starts with the "tunnel" profile, so the base
-  # `docker compose up -d` is unaffected.
-  #
-  #   1. Create the tunnel in Cloudflare Zero Trust > Networks > Tunnels.
-  #   2. Put its token in .env as TUNNEL_TOKEN=...
-  #   3. docker compose --profile tunnel up -d
-  #   4. In the dashboard, route the public hostname to  http://openbrain-mcp:8000
-  #
-  # cloudflared shares this compose network, so "openbrain-mcp" resolves for it.
+  # REMOTE server — Google OAuth on /mcp (for claude.ai) + bearer token on the
+  # REST API. Same image + DB. NOT published to a host port; only the cloudflared
+  # sidecar reaches it over the compose network. Opt-in via the "tunnel" profile.
+  openbrain-oauth:
+    image: openbrain-mcp
+    container_name: openbrain-oauth
+    profiles: ["tunnel"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:54422/postgres
+      OLLAMA_URL: http://host.docker.internal:11434
+      EMBED_MODEL: qwen3-embedding:4b
+      EXTRACT_MODEL: qwen3:4b
+      EMBED_DIM: "2560"
+      ENABLE_EXTRACTION: "true"
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      OAUTH_BASE_URL: ${OAUTH_BASE_URL:-https://openbrain.yfy.ae}
+      OPENBRAIN_TOKEN: ${OPENBRAIN_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Dashboard-managed Cloudflare tunnel -> routes the public hostname to the
+  # OAuth server (openbrain-oauth:8000). Opt-in via the "tunnel" profile.
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: openbrain-tunnel
@@ -41,5 +54,5 @@ services:
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
     depends_on:
-      - openbrain-mcp
+      - openbrain-oauth
     restart: unless-stopped

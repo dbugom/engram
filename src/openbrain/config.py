@@ -47,3 +47,15 @@ HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "60"))
 # the REST API is open — fine while the server is bound to localhost, but set
 # this before exposing the server through a Cloudflare tunnel.
 API_TOKEN = os.environ.get("OPENBRAIN_TOKEN")
+
+# --- OAuth for remote clients (claude.ai) ------------------------------------
+# When GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET are set, the MCP endpoint (/mcp)
+# is protected by Google OAuth (via FastMCP's GoogleProvider / OAuthProxy), which
+# is what claude.ai's custom connector requires. When unset, /mcp is open (the
+# original local-only behaviour) so local setup is never blocked.
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+# The public base URL clients reach (the Cloudflare tunnel hostname).
+OAUTH_BASE_URL = os.environ.get("OAUTH_BASE_URL", "https://openbrain.yfy.ae")
+# Must match the redirect URI registered in the Google OAuth client.
+OAUTH_REDIRECT_PATH = os.environ.get("OAUTH_REDIRECT_PATH", "/auth/callback")
