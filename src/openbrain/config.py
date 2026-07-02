@@ -56,6 +56,6 @@ API_TOKEN = os.environ.get("OPENBRAIN_TOKEN")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 # The public base URL clients reach (the Cloudflare tunnel hostname).
-OAUTH_BASE_URL = os.environ.get("OAUTH_BASE_URL", "https://openbrain.yfy.ae")
+OAUTH_BASE_URL = os.environ.get("OAUTH_BASE_URL", "https://openbrain.example.com")
 # Must match the redirect URI registered in the Google OAuth client.
 OAUTH_REDIRECT_PATH = os.environ.get("OAUTH_REDIRECT_PATH", "/auth/callback")

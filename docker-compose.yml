@@ -38,7 +38,7 @@ services:
       MCP_PORT: "8000"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      OAUTH_BASE_URL: ${OAUTH_BASE_URL:-https://openbrain.yfy.ae}
+      OAUTH_BASE_URL: ${OAUTH_BASE_URL:-https://openbrain.example.com}
       OPENBRAIN_TOKEN: ${OPENBRAIN_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
