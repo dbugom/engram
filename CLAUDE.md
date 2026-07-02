@@ -1,144 +1,107 @@
 # Open Brain — project guide (for Claude Code & humans)
 
-A self-hosted, MCP-accessible **semantic personal memory**. Any MCP client
-(Claude Code, Claude Desktop, ChatGPT dev mode, Grok) can capture thoughts and
-retrieve them by meaning. Everything runs locally; nothing leaves the machine.
+A self-hosted, MCP-accessible **semantic personal memory**. Capture thoughts once;
+retrieve them by meaning from any client — **local Claude Code**, **remote Claude
+Code**, or **claude.ai** — all reading and writing one private store. Embeddings,
+database, and extraction run locally; nothing leaves the machine except what a
+remote client fetches over an OAuth-gated tunnel.
 
-## Architecture
+## Architecture (dual-container)
 
 ```
-Claude Code / Desktop ──(MCP, Streamable HTTP :8000/mcp)──► openbrain-mcp (Docker)
-                                                               │
-                        embeddings + extraction (HTTP)         ▼
-   Ollama (host, Metal) ◄───────────────────────────  Postgres + pgvector
-     qwen3-embedding:4b  (2560-dim, stored as halfvec)   (Supabase local :54422)
-     qwen3:4b           (metadata extraction)            HNSW cosine index
+  LOCAL (this Mac — no login)
+  Claude Code (local) ──► http://localhost:8000/mcp ─────► openbrain-mcp  ─┐
+  auto-capture hook   ──► http://localhost:8000/capture ─► (OPEN)          │
+                                                                           │ shared
+  REMOTE (internet — Google OAuth)                                         │ DB +
+  claude.ai / remote Claude Code                                           │ Ollama
+     │  https://openbrain.yfy.ae/mcp                                       │
+     ▼                                                                     ▼
+  Cloudflare tunnel ─────► openbrain-oauth ───────────────► Postgres + pgvector
+  (cloudflared sidecar)    (Google OAuth on /mcp)           Supabase local :54422
+                                                            halfvec(2560) + HNSW cosine
+                               ▲  embeddings + extraction         ▲
+                               └── Ollama (host, Metal) ──────────┘
+                                   qwen3-embedding:4b (2560d) · qwen3:4b (extraction)
 ```
 
-- **DB**: Supabase local stack (Postgres 15 + pgvector), Studio UI at
-  http://localhost:54423 to browse/audit thoughts. DB on `:54422`.
-  (Ports are shifted +100 from Supabase defaults so this coexists with the
-  separate `kms-lab` Supabase project already running on 5432x.)
-- **Vectors**: `halfvec(2560)` with an HNSW index using `halfvec_cosine_ops`.
-  halfvec is required because pgvector cannot HNSW-index a plain `vector()`
-  above 2000 dims; halfvec indexes up to 4000. Cosine similarity = `1 - (a <=> b)`.
-- **Embeddings**: local Qwen3-Embedding-4B via Ollama. Asymmetric usage —
-  **queries** get an instruction prefix, **documents** are embedded raw
-  (the model's training recipe; improves retrieval).
-- **Extraction**: local Qwen3-4B fills `type / people / topics / event_date`.
-  Best-effort — a failure never blocks a capture (falls back to a heuristic type).
-- **Transport**: Streamable HTTP (not stdio) so the *same* server works locally
-  now and through a Cloudflare tunnel later, with no code change.
+**Two app containers, same image (`openbrain-mcp`), same database:**
+- **`openbrain-mcp`** — OPEN, bound to `127.0.0.1:8000`. Used by local Claude Code
+  and the auto-capture hook. No login.
+- **`openbrain-oauth`** — Google OAuth on `/mcp` (FastMCP `GoogleProvider`); REST
+  gated by a bearer token. Not published to a host port; the `cloudflared` sidecar
+  reaches it over the compose network and the tunnel exposes it at
+  `https://openbrain.yfy.ae/mcp`. Opt-in via the `tunnel` compose profile.
+
+## Key design decisions
+- **`halfvec(2560)` + HNSW `halfvec_cosine_ops`** — pgvector can't HNSW-index a
+  plain `vector()` above 2000 dims; halfvec indexes up to 4000, so Qwen3-4B's
+  2560-dim vectors index cleanly. Cosine similarity = `1 - (a <=> b)`.
+- **Asymmetric embeddings** — queries get an instruction prefix, documents are
+  embedded raw (Qwen3-Embedding's training recipe).
+- **FastMCP v3 + GoogleProvider for remote auth** — emits the `401 +
+  WWW-Authenticate` header + protected-resource metadata that claude.ai's
+  connector requires. Cloudflare's own "Managed OAuth" had a web-connector interop
+  bug (Anthropic issue #410), so the *server* owns the OAuth handshake instead.
+  **Cloudflare Access is NOT placed in front of `/mcp`** — an Access login page
+  would hijack the OAuth handshake; protection is the Google OAuth token itself.
+- **Deterministic conflict resolution** (`supersede`), provenance on every row,
+  idempotent captures (content-hash), near-duplicate warnings.
 
 ## Layout
-
 ```
 src/openbrain/
-  config.py     env-driven config
-  embed.py      Ollama embedding client (asymmetric query/doc)
-  extract.py    Ollama metadata extraction (+ heuristic fallback)
-  db.py         asyncpg access layer (insert/search/list/supersede/archive/stats)
-  server.py     FastMCP server + tools
-  migrate.py    applies db/schema.sql
-  selftest.py   end-to-end smoke test (bypasses MCP)
-db/schema.sql   the thoughts table + indexes
+  config.py    env config (DB, Ollama, models, OAuth, REST token)
+  embed.py     Ollama embeddings (asymmetric query/doc)
+  extract.py   Ollama metadata extraction (+ heuristic fallback)
+  db.py        asyncpg access layer
+  service.py   shared capture/search logic (MCP tools + REST both call it)
+  server.py    FastMCP v3 server: MCP tools + REST routes + Google OAuth
+  migrate.py   applies db/schema.sql
+  selftest.py  end-to-end smoke test
+db/schema.sql  thoughts table + indexes
+hooks/         on_stop.sh -> auto_capture.py (Claude Code auto-capture)
 Dockerfile, docker-compose.yml, requirements.txt
 ```
 
-## Run it (first time)
-
+## Run
 ```bash
-cd Downloads/AI_Engine/openbrain
-
-# 1. Start the local Supabase stack (Postgres + pgvector + Studio)
-supabase start --workdir .
-
-# 2. Apply the schema (creates the thoughts table + HNSW cosine index)
-docker compose build
-docker compose run --rm openbrain-mcp python -m openbrain.migrate
-
-# 3. Start the MCP server
-docker compose up -d
-
-# 4. Verify the whole stack end to end
+supabase start --workdir .                 # Postgres + pgvector + Studio
+docker compose run --rm openbrain-mcp python -m openbrain.migrate   # first time
+docker compose up -d                       # local server (openbrain-mcp, OPEN)
+docker compose --profile tunnel up -d      # + openbrain-oauth + cloudflared (remote)
 docker compose exec openbrain-mcp python -m openbrain.selftest
 ```
 
-Ollama must be running on the host with the models pulled:
-`ollama pull qwen3-embedding:4b` and `ollama pull qwen3:4b`.
+## MCP tools / REST API
 
-## Connect Claude Code
+| MCP tool | REST | Purpose |
+|----------|------|---------|
+| `capture_thought` | `POST /capture` | Embed + store a thought with provenance |
+| `search_thought` | `POST /search` | Cosine semantic search |
+| `list_thoughts` | — | Recent thoughts (weekly review) |
+| `supersede_thought` | — | Retire an outdated thought for a corrected one |
+| `forget_thought` | — | Archive (hide from search, keep) |
+| `brain_stats` | — | Totals / status / types / date range |
+| `verify_connection` | `GET /health` | Round-trip / liveness |
 
-```bash
-claude mcp add --transport http openbrain http://localhost:8000/mcp
-```
+## Auth model
+- **Local** (`openbrain-mcp`, localhost): open — no login for Claude Code or the hook.
+- **Remote** (`openbrain-oauth`, tunnel): Google OAuth on `/mcp`; REST
+  (`/capture`,`/search`) needs `Authorization: Bearer $OPENBRAIN_TOKEN`;
+  `/health`, `/.well-known/*`, `/auth/*` are public (required for OAuth discovery).
+  Access is restricted to your Google account/org by the Google OAuth app.
 
-Then, in a session: *"Use the openbrain tools — run verify_connection."* After
-that you can just ask naturally (Claude picks the tools up from their
-descriptions): *"Search my brain: what did I decide about the launch?"*
+## Secrets — `.env` (gitignored, never commit)
+`TUNNEL_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_BASE_URL`,
+`OPENBRAIN_TOKEN`. The Google OAuth redirect URI is `https://openbrain.yfy.ae/auth/callback`.
 
-## MCP tools
+## Git branching model
+- **`main`** — stable, tagged releases (`v0.1.0`, `v0.2.0`, …). Do not commit directly.
+- **`develop`** — integration branch; feature work merges here first.
+- **`feature/*`** — one branch per change; branch off `develop`, merge back with `--no-ff`.
+- **Release**: merge `develop` → `main` (`--no-ff`), then `git tag -a vX.Y.Z`.
 
-| Tool | Purpose |
-|------|---------|
-| `capture_thought` | Embed + store a self-contained thought with provenance |
-| `search_thought` | Cosine semantic search ("what do I know about X?") |
-| `list_thoughts` | Recent thoughts in the last N days (weekly review) |
-| `supersede_thought` | Retire an outdated thought in favour of a corrected one |
-| `forget_thought` | Archive a thought (kept, hidden from search) |
-| `brain_stats` | Totals, status breakdown, types, date range |
-| `verify_connection` | Canary round-trip: write → search → delete |
-
-## Automation (REST API + auto-capture hook)
-
-The server also exposes a small REST API on the same port — `GET /health`,
-`POST /capture`, `POST /search` — for deterministic automation that can't do an
-MCP handshake. MCP tools and REST routes share `service.py`, so both take the
-identical embed → extract → dedup → provenance path. Optional bearer auth via
-`OPENBRAIN_TOKEN` (off by default; set it before tunnelling).
-
-A Claude Code **Stop hook** (`hooks/on_stop.sh` → `hooks/auto_capture.py`,
-registered in `~/.claude/settings.json`) does hands-free capture: after each
-turn it extracts 0–3 durable facts with Qwen3-4B (via Ollama **structured
-outputs** — a JSON schema, not `format:"json"`, which qwen3 mis-handles) and
-POSTs them to `/capture`. It runs detached (never blocks Claude), is strict by
-default, tags rows `source="auto-capture"`, and is disabled by
-`touch ~/.openbrain/disable_autocapture`.
-
-## Data model notes
-
-- **Provenance** on every row: `source`, `origin_tool`, `created_at`.
-- **Conflict resolution is deterministic** (most-recent-wins via
-  `supersede_thought`), not LLM-judged. Old rows are kept as `superseded`.
-- **Idempotency**: exact re-captures are deduped by a normalized-text hash;
-  near-duplicates (cosine ≥ 0.95) return a warning but still save.
-- `status`: `active` (searchable) | `superseded` | `archived` (hidden).
-
-## Remote access (Cloudflare tunnel — later)
-
-The server listens on `127.0.0.1:8000`. To reach it from anywhere:
-
-```bash
-brew install cloudflared
-cloudflared tunnel --url http://localhost:8000
-```
-
-That prints a public `https://…trycloudflare.com` URL; connect a web AI to
-`<url>/mcp`. **Gate it** — either a named tunnel behind Cloudflare Access
-(email policy) or keep it ad-hoc/short-lived. Note: the consumer Gemini app
-cannot add custom MCP; ChatGPT needs Developer Mode; Grok needs a paid tier.
-Because writes are now possible from web AIs, treat any exposed endpoint as an
-attack surface (memory-poisoning) — prefer Access in front of it.
-
-## Troubleshooting
-
-- **`halfvec` type errors on migrate** → the local pgvector is < 0.7. Check
-  `select extversion from pg_extension where extname='vector'`. Update the
-  Supabase CLI / re-pull images, or fall back to `vector(2560)` with **no** HNSW
-  index (brute-force cosine — fine at personal scale).
-- **Container can't reach DB/Ollama** → confirm `host.docker.internal` resolves
-  (compose sets `extra_hosts`) and that `supabase start` and `ollama` are up.
-- **Embedding dim mismatch** → `EMBED_DIM` must equal the model's output (2560
-  for qwen3-embedding:4b). Changing the model/dim requires a full re-embed.
-- **Slow captures** → the first Qwen3-4B extraction call loads the model; warm
-  it with `ollama run qwen3:4b ""` or set `ENABLE_EXTRACTION=false`.
+## Everyday use, per-client triggers, remote access, and troubleshooting
+See **[MANUAL.md](MANUAL.md)** — especially §3 (triggering from local Claude Code,
+remote Claude Code, and claude.ai).
