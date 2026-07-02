@@ -50,7 +50,9 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: openbrain-tunnel
     profiles: ["tunnel"]
-    command: tunnel --no-autoupdate run
+    # http2 (not the default quic/UDP) — more reliable on restrictive networks;
+    # avoids the "datagram manager" QUIC drops that cause intermittent outages.
+    command: tunnel --no-autoupdate --protocol http2 run
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
     depends_on:
