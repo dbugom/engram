@@ -8,7 +8,7 @@ your Mac. Remote clients reach it over an OAuth-gated Cloudflare tunnel.
 - **Storage**: Supabase local (Postgres + pgvector), `halfvec(2560)` + HNSW cosine
 - **Embeddings**: Ollama `qwen3-embedding:4b` (2560-dim) · **Extraction**: `qwen3:4b`
 - **Local endpoint** (open): `http://localhost:8000/mcp`
-- **Remote endpoint** (Google OAuth): `https://openbrain.yfy.ae/mcp`
+- **Remote endpoint** (Google OAuth): `https://openbrain.example.com/mcp`
 
 ---
 
@@ -30,14 +30,14 @@ your Mac. Remote clients reach it over an OAuth-gated Cloudflare tunnel.
 
 | Thing | Value |
 |---|---|
-| Project folder | `/Users/mohammadrazavi/Downloads/AI_Engine/openbrain` |
+| Project folder | `~/openbrain` |
 | **Local** MCP (open) | `http://localhost:8000/mcp` |
-| **Remote** MCP (Google OAuth) | `https://openbrain.yfy.ae/mcp` |
+| **Remote** MCP (Google OAuth) | `https://openbrain.example.com/mcp` |
 | Postgres (DB) | `localhost:54422` (user/pw `postgres`) · container `supabase_db_openbrain` |
 | Supabase Studio | http://localhost:54423 |
 | Containers | `openbrain-mcp` (open, local) · `openbrain-oauth` (OAuth, remote) · `openbrain-tunnel` |
 
-Run everything from the project folder: `cd /Users/mohammadrazavi/Downloads/AI_Engine/openbrain`
+Run everything from the project folder: `cd ~/openbrain`
 
 ---
 
@@ -90,7 +90,7 @@ No login, lowest latency, works offline. This is your everyday driver.
 
 Point Claude Code at the **public** URL; it runs the OAuth flow automatically:
 ```bash
-claude mcp add --transport http --scope user openbrain https://openbrain.yfy.ae/mcp
+claude mcp add --transport http --scope user openbrain https://openbrain.example.com/mcp
 ```
 On first use Claude Code opens your browser → **sign in with Google** (the account
 allowed by the OAuth app) → consent → it caches the token and connects. No PIN, no
@@ -99,7 +99,7 @@ manual headers. (Requires the tunnel to be up on your Mac.)
 ### C) claude.ai (web / desktop / mobile) — Google login once
 
 1. **claude.ai → Settings → Connectors → Add custom connector**
-2. Name `Open Brain` · **URL `https://openbrain.yfy.ae/mcp`**
+2. Name `Open Brain` · **URL `https://openbrain.example.com/mcp`**
 3. **Connect** → it detects OAuth → **sign in with Google** → consent → connected.
 4. In a chat, make sure the connector is enabled, then use it (below).
 
@@ -212,20 +212,20 @@ curl -s -X POST localhost:8000/capture -H 'content-type: application/json' \
 For reference / rebuilding. Remote access = **Cloudflare tunnel → OAuth server → Google login**.
 
 - **`.env`** holds: `TUNNEL_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-  `OAUTH_BASE_URL=https://openbrain.yfy.ae`, `OPENBRAIN_TOKEN`.
+  `OAUTH_BASE_URL=https://openbrain.example.com`, `OPENBRAIN_TOKEN`.
 - **Google OAuth app** (Google Cloud Console → Credentials → OAuth client ID, Web
-  application): redirect URI **`https://openbrain.yfy.ae/auth/callback`**; scopes
+  application): redirect URI **`https://openbrain.example.com/auth/callback`**; scopes
   `openid email profile`; restricted to your account (Internal user type, or test
   user). Setting `GOOGLE_CLIENT_ID/SECRET` in `.env` turns OAuth on for `openbrain-oauth`.
-- **Cloudflare tunnel** (dashboard): Public Hostname `openbrain.yfy.ae` → Service
+- **Cloudflare tunnel** (dashboard): Public Hostname `openbrain.example.com` → Service
   **`http://openbrain-oauth:8000`**. **No Cloudflare Access app** on this hostname —
   the server's Google OAuth is the gate (an Access login page would break the OAuth
   handshake).
 - **Bring up / down**: `docker compose --profile tunnel up -d` / `... down`.
 - **Verify it's gated correctly** (anonymous request must get OAuth, not your data):
   ```bash
-  curl -sS -o /dev/null -w "%{http_code}\n" https://openbrain.yfy.ae/mcp   # expect 401
-  curl -s https://openbrain.yfy.ae/health                                  # {"...","oauth":true}
+  curl -sS -o /dev/null -w "%{http_code}\n" https://openbrain.example.com/mcp   # expect 401
+  curl -s https://openbrain.example.com/health                                  # {"...","oauth":true}
   ```
   `/mcp` → **401 `WWW-Authenticate: Bearer`** = good. If it returns your service JSON,
   it's open; if it redirects to `cloudflareaccess.com`, an Access app is still attached.
@@ -243,6 +243,6 @@ For reference / rebuilding. Remote access = **Cloudflare tunnel → OAuth server
 | Google "access blocked" at consent | The account isn't allowed by the OAuth app (Internal org / test users). Add it, or check the app's user type. |
 | Captures slow first time | Model cold-start; warm with `ollama run qwen3:4b ""`. |
 | Search misses something saved | *"search with min_similarity 0.15."* |
-| Ports after a Supabase update | `supabase status --workdir .`. Ports are shifted +100 (`5442x`) to coexist with the `kms-lab` project. |
+| Ports after a Supabase update | `supabase status --workdir .`. Ports are shifted +100 (`5442x`) to coexist with the `another-supabase-project` project. |
 
 Architecture & design rationale: **[CLAUDE.md](CLAUDE.md)**.

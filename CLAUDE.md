@@ -15,7 +15,7 @@ remote client fetches over an OAuth-gated tunnel.
                                                                            │ shared
   REMOTE (internet — Google OAuth)                                         │ DB +
   claude.ai / remote Claude Code                                           │ Ollama
-     │  https://openbrain.yfy.ae/mcp                                       │
+     │  https://openbrain.example.com/mcp                                       │
      ▼                                                                     ▼
   Cloudflare tunnel ─────► openbrain-oauth ───────────────► Postgres + pgvector
   (cloudflared sidecar)    (Google OAuth on /mcp)           Supabase local :54422
@@ -31,7 +31,7 @@ remote client fetches over an OAuth-gated tunnel.
 - **`openbrain-oauth`** — Google OAuth on `/mcp` (FastMCP `GoogleProvider`); REST
   gated by a bearer token. Not published to a host port; the `cloudflared` sidecar
   reaches it over the compose network and the tunnel exposes it at
-  `https://openbrain.yfy.ae/mcp`. Opt-in via the `tunnel` compose profile.
+  `https://openbrain.example.com/mcp`. Opt-in via the `tunnel` compose profile.
 
 ## Key design decisions
 - **`halfvec(2560)` + HNSW `halfvec_cosine_ops`** — pgvector can't HNSW-index a
@@ -94,7 +94,7 @@ docker compose exec openbrain-mcp python -m openbrain.selftest
 
 ## Secrets — `.env` (gitignored, never commit)
 `TUNNEL_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `OAUTH_BASE_URL`,
-`OPENBRAIN_TOKEN`. The Google OAuth redirect URI is `https://openbrain.yfy.ae/auth/callback`.
+`OPENBRAIN_TOKEN`. The Google OAuth redirect URI is `https://openbrain.example.com/auth/callback`.
 
 ## Git branching model
 - **`main`** — stable, tagged releases (`v0.1.0`, `v0.2.0`, …). Do not commit directly.
