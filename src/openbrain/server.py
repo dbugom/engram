@@ -59,6 +59,7 @@ async def capture_thought(
     event_date: str | None = None,
     skip_extraction: bool = False,
     on_near_duplicate: Literal["store", "skip"] = "store",
+    metadata: dict | None = None,
 ) -> dict:
     """Save a thought to the Open Brain (embeds it + stores with provenance).
 
@@ -68,12 +69,14 @@ async def capture_thought(
     model unless you pass them or set skip_extraction=true. `event_date` = 'YYYY-MM-DD'.
     `on_near_duplicate='skip'` refuses to store when an active thought is already
     >= NEAR_DUP_THRESHOLD (0.95) cosine-similar; the result then carries
-    skipped=true plus the existing thought's id/text.
+    skipped=true plus the existing thought's id/text. `metadata` = optional JSON
+    object stored alongside the thought (e.g. {"importance": 4}).
     """
     return await service.capture(
         text=text, source=source, origin_tool=origin_tool, type=type,
         people=people, topics=topics, event_date=event_date,
         skip_extraction=skip_extraction, on_near_duplicate=on_near_duplicate,
+        metadata=metadata,
     )
 
 
@@ -214,6 +217,9 @@ async def http_capture(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
     if not body.get("text"):
         return JSONResponse({"ok": False, "error": "missing text"}, status_code=400)
+    meta = body.get("metadata")
+    if meta is not None and not isinstance(meta, dict):
+        meta = None  # invalid metadata is dropped, the capture still proceeds
     result = await service.capture(
         text=body.get("text"), source=body.get("source"),
         origin_tool=body.get("origin_tool"), type=body.get("type"),
@@ -221,6 +227,7 @@ async def http_capture(request: Request) -> JSONResponse:
         event_date=body.get("event_date"),
         skip_extraction=bool(body.get("skip_extraction", False)),
         on_near_duplicate=body.get("on_near_duplicate", "store"),
+        metadata=meta,
     )
     return JSONResponse(result)
 
