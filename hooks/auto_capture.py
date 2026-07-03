@@ -21,6 +21,12 @@ OPENBRAIN_URL = os.environ.get("OPENBRAIN_URL", "http://localhost:8000")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EXTRACT_MODEL = os.environ.get("OPENBRAIN_AUTOCAPTURE_MODEL", "qwen3:4b")
 TOKEN = os.environ.get("OPENBRAIN_TOKEN")
+# Memories rated below this importance (1-5 scale, see PROMPT) are dropped.
+# Host-side env var (the hook inherits Claude Code's process env, not .env).
+try:
+    MIN_IMPORTANCE = int(os.environ.get("OPENBRAIN_MIN_IMPORTANCE", "3"))
+except ValueError:
+    MIN_IMPORTANCE = 3
 
 HOME = os.path.expanduser("~")
 LOG_DIR = os.path.join(HOME, ".openbrain")
@@ -29,13 +35,20 @@ DISABLE_FILE = os.path.join(LOG_DIR, "disable_autocapture")
 
 PROMPT = (
     "You extract durable long-term memories from one user/assistant exchange. "
-    'Output a JSON object of the form {"memories": ["..."]} containing 0 to 3 '
-    "strings. Each string is a self-contained fact, decision, preference, or piece "
-    "of context about the USER — their projects, people, or choices — worth "
-    "remembering weeks from now, written to stand alone with zero context. Exclude "
-    "anything transient: questions, code, debugging chatter, pleasantries, or ideas "
-    "the user did not adopt. When in doubt, exclude it. If nothing is durable, "
-    'output {"memories": []}. Never invent details not present in the exchange.'
+    'Output a JSON object of the form {"memories": [{"text": "...", "importance": N}]} '
+    "containing 0 to 3 items. Each `text` is a self-contained fact, decision, "
+    "preference, or piece of context about the USER — their projects, people, or "
+    "choices — worth remembering weeks from now, written to stand alone with zero "
+    "context. Exclude anything transient: questions, code, debugging chatter, "
+    "pleasantries, or ideas the user did not adopt. When in doubt, exclude it. "
+    "Rate each memory's `importance` from 1 to 5: "
+    "1 = trivial or transient detail; "
+    "2 = minor context, unlikely to matter in a week; "
+    "3 = useful durable context (project detail, minor preference); "
+    "4 = important fact, decision, or preference that shapes future work; "
+    "5 = critical identity, relationship, commitment, or major decision. "
+    'If nothing is durable, output {"memories": []}. '
+    "Never invent details not present in the exchange."
 )
 
 # Ollama structured-output schema — forces the model to emit exactly this shape.
@@ -43,7 +56,18 @@ PROMPT = (
 FORMAT = {
     "type": "object",
     "properties": {
-        "memories": {"type": "array", "items": {"type": "string"}, "maxItems": 3}
+        "memories": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "importance": {"type": "integer", "minimum": 1, "maximum": 5},
+                },
+                "required": ["text", "importance"],
+            },
+        }
     },
     "required": ["memories"],
 }
@@ -107,6 +131,7 @@ def read_last_exchange(transcript_path):
 
 
 def extract(exchange):
+    """Return up to 3 (text, importance) tuples from the exchange."""
     body = {
         "model": EXTRACT_MODEL, "think": False, "format": FORMAT, "stream": False,
         "messages": [
@@ -122,11 +147,21 @@ def extract(exchange):
         return []
     out = []
     for item in mems:
+        # Tolerate legacy bare-string items so a stale response shape can't
+        # crash the hook; they get the neutral importance 3.
         s = item if isinstance(item, str) else (
             item.get("text", "") if isinstance(item, dict) else "")
         s = (s or "").strip()
-        if 15 <= len(s) <= 500:
-            out.append(s)
+        if not (15 <= len(s) <= 500):
+            continue
+        # Ollama's grammar decoding doesn't reliably enforce schema min/max,
+        # so clamp client-side; unparseable ratings fall back to 3 (the model
+        # already deemed the memory durable).
+        try:
+            imp = int(item.get("importance")) if isinstance(item, dict) else 3
+        except (TypeError, ValueError):
+            imp = 3
+        out.append((s, max(1, min(5, imp))))
     return out[:3]
 
 
@@ -168,7 +203,10 @@ def main():
 
     project = os.path.basename(cwd.rstrip("/")) or "unknown"
     headers = {"authorization": f"Bearer {TOKEN}"} if TOKEN else {}
-    for fact in facts:
+    for fact, imp in facts:
+        if imp < MIN_IMPORTANCE:
+            log(f"[dropped imp={imp}] {fact[:110]}")
+            continue
         try:
             res = post_json(f"{OPENBRAIN_URL}/capture", {
                 "text": fact,
@@ -177,12 +215,15 @@ def main():
                 # Auto-capture is exactly the client near-dup skipping exists
                 # for — a paraphrase of something already stored is noise here.
                 "on_near_duplicate": "skip",
+                "metadata": {"importance": imp, "auto_capture_v": 2},
             }, timeout=60, headers=headers)
             if res.get("skipped"):
                 log(f"[skip-near-dup sim={res.get('similarity')} "
                     f"existing={str(res.get('existing_id'))[:8]}] {fact[:110]}")
+            elif res.get("duplicate"):
+                log(f"[dup] {fact[:110]}")
             else:
-                log(f"[{'dup' if res.get('duplicate') else 'saved'}] {fact[:110]}")
+                log(f"[saved imp={imp}] {fact[:110]}")
         except Exception as e:
             log(f"[capture-error] {e} :: {fact[:80]}")
 

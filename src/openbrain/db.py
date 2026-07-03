@@ -58,6 +58,8 @@ def _row_to_dict(r: asyncpg.Record) -> dict:
         d["event_date"] = d["event_date"].isoformat()
     if d.get("similarity") is not None:
         d["similarity"] = round(float(d["similarity"]), 4)
+    if isinstance(d.get("metadata"), str):  # asyncpg returns jsonb as str
+        d["metadata"] = json.loads(d["metadata"])
     return d
 
 
@@ -120,7 +122,7 @@ async def search_thoughts(*, query_embedding, limit=8, min_similarity=0.0,
     rows = await pool.fetch(
         f"""
         select id, text, type, people, topics, source, origin_tool,
-               created_at, event_date, status, superseded_by,
+               created_at, event_date, status, superseded_by, metadata,
                1 - (embedding <=> $1::{_HALF}) as similarity
         from thoughts
         where status <> 'archived'
@@ -141,7 +143,7 @@ async def list_recent(*, days=7, limit=100, person=None, type=None) -> list[dict
     rows = await pool.fetch(
         """
         select id, text, type, people, topics, source, origin_tool,
-               created_at, event_date, status
+               created_at, event_date, status, metadata
         from thoughts
         where created_at >= now() - ($1::int * interval '1 day')
           and status = 'active'
