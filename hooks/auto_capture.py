@@ -174,8 +174,15 @@ def main():
                 "text": fact,
                 "source": "auto-capture",
                 "origin_tool": f"claude-code:{project}",
+                # Auto-capture is exactly the client near-dup skipping exists
+                # for — a paraphrase of something already stored is noise here.
+                "on_near_duplicate": "skip",
             }, timeout=60, headers=headers)
-            log(f"[{'dup' if res.get('duplicate') else 'saved'}] {fact[:110]}")
+            if res.get("skipped"):
+                log(f"[skip-near-dup sim={res.get('similarity')} "
+                    f"existing={str(res.get('existing_id'))[:8]}] {fact[:110]}")
+            else:
+                log(f"[{'dup' if res.get('duplicate') else 'saved'}] {fact[:110]}")
         except Exception as e:
             log(f"[capture-error] {e} :: {fact[:80]}")
 

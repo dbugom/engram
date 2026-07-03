@@ -9,12 +9,28 @@ from .extract import extract_metadata
 
 
 async def capture(text, source=None, origin_tool=None, type=None, people=None,
-                  topics=None, event_date=None, skip_extraction=False) -> dict:
+                  topics=None, event_date=None, skip_extraction=False,
+                  on_near_duplicate="store", metadata=None) -> dict:
     text = (text or "").strip()
     if not text:
         return {"ok": False, "error": "empty text"}
+    if on_near_duplicate not in ("store", "skip"):
+        on_near_duplicate = "store"  # a bad aux value must never block a capture
 
     embedding = await embed_text(text, is_query=False)
+
+    # Neighbour check happens before extraction so skip mode never pays for an
+    # extraction it throws away. Not atomic with the insert — two concurrent
+    # near-identical captures can both land (single-user store; the exact
+    # content-hash guard and the review_duplicates tool are the backstops).
+    near = await db.nearest_similarity(embedding)
+    if (near and on_near_duplicate == "skip"
+            and near["similarity"] >= config.NEAR_DUP_THRESHOLD):
+        return {
+            "ok": True, "skipped": True, "reason": "near_duplicate",
+            "similarity": round(near["similarity"], 3),
+            "existing_id": near["id"], "existing_text": near["text"],
+        }
 
     m_type, m_people, m_topics, m_date = type, people, topics, event_date
     if not skip_extraction and (type is None or people is None or topics is None):
@@ -28,10 +44,10 @@ async def capture(text, source=None, origin_tool=None, type=None, people=None,
         m_people = people or []
         m_topics = topics or []
 
-    near = await db.nearest_similarity(embedding)
     result = await db.insert_thought(
         text=text, embedding=embedding, type=m_type, people=m_people,
         topics=m_topics, source=source, origin_tool=origin_tool, event_date=m_date,
+        metadata=metadata,
     )
     result.update({"ok": True, "type": m_type, "people": m_people, "topics": m_topics})
     if (near and not result.get("duplicate")
