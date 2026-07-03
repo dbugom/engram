@@ -160,6 +160,31 @@ async def forget_thought(id: str) -> dict:
 
 
 @mcp.tool()
+async def review_duplicates(
+    threshold: float | None = None,
+    per_thought: int = 5,
+    limit: int = 50,
+) -> dict:
+    """Find pairs of highly similar ACTIVE thoughts for the weekly review.
+
+    Returns pairs oriented older/newer (ids, texts, created_at, similarity),
+    sorted by similarity descending. `threshold` defaults to
+    REVIEW_DUP_THRESHOLD (0.90). To consolidate a pair, usually
+    supersede_thought(old_id=older.id, new_text=<merged text>) or
+    forget_thought(older.id). Overlapping pairs (A~B, B~C) indicate a cluster —
+    resolve them one at a time and re-run.
+    """
+    t = config.REVIEW_DUP_THRESHOLD if threshold is None else threshold
+    t = max(0.5, min(0.9999, t))
+    per_thought = max(1, min(20, per_thought))
+    limit = max(1, min(200, limit))
+    pairs = await db.find_duplicate_pairs(
+        threshold=t, per_thought=per_thought, limit=limit,
+    )
+    return {"ok": True, "threshold": t, "pair_count": len(pairs), "pairs": pairs}
+
+
+@mcp.tool()
 async def brain_stats() -> dict:
     """Overview of the Open Brain: totals, status breakdown, types, date range."""
     return await db.stats()
