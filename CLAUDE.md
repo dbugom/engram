@@ -46,7 +46,10 @@ remote client fetches over an OAuth-gated tunnel.
   **Cloudflare Access is NOT placed in front of `/mcp`** — an Access login page
   would hijack the OAuth handshake; protection is the Google OAuth token itself.
 - **Deterministic conflict resolution** (`supersede`), provenance on every row,
-  idempotent captures (content-hash), near-duplicate warnings.
+  idempotent captures (content-hash), near-duplicate warnings with an optional
+  skip policy (`on_near_duplicate="skip"` — used by auto-capture, which also
+  rates importance 1–5 and drops low-rated facts), and a `review_duplicates`
+  tool for weekly consolidation.
 
 ## Layout
 ```
@@ -82,6 +85,7 @@ docker compose exec openbrain-mcp python -m openbrain.selftest
 | `list_thoughts` | — | Recent thoughts (weekly review) |
 | `supersede_thought` | — | Retire an outdated thought for a corrected one |
 | `forget_thought` | — | Archive (hide from search, keep) |
+| `review_duplicates` | — | Similar-pair report for weekly consolidation |
 | `brain_stats` | — | Totals / status / types / date range |
 | `verify_connection` | `GET /health` | Round-trip / liveness |
 
