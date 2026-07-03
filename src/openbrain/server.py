@@ -9,6 +9,8 @@ Auth: when GOOGLE_CLIENT_ID/SECRET are configured, /mcp is protected by Google
 OAuth (FastMCP GoogleProvider) — required for claude.ai. When unset, /mcp is open
 (local-only behaviour). The REST routes are separately gated by OPENBRAIN_TOKEN.
 """
+from typing import Literal
+
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -56,6 +58,7 @@ async def capture_thought(
     topics: list[str] | None = None,
     event_date: str | None = None,
     skip_extraction: bool = False,
+    on_near_duplicate: Literal["store", "skip"] = "store",
 ) -> dict:
     """Save a thought to the Open Brain (embeds it + stores with provenance).
 
@@ -63,11 +66,14 @@ async def capture_thought(
     later with zero prior context. `source` = where it came from; `origin_tool` =
     which AI/tool wrote it. Type/people/topics/date are auto-extracted by a local
     model unless you pass them or set skip_extraction=true. `event_date` = 'YYYY-MM-DD'.
+    `on_near_duplicate='skip'` refuses to store when an active thought is already
+    >= NEAR_DUP_THRESHOLD (0.95) cosine-similar; the result then carries
+    skipped=true plus the existing thought's id/text.
     """
     return await service.capture(
         text=text, source=source, origin_tool=origin_tool, type=type,
         people=people, topics=topics, event_date=event_date,
-        skip_extraction=skip_extraction,
+        skip_extraction=skip_extraction, on_near_duplicate=on_near_duplicate,
     )
 
 
@@ -132,6 +138,9 @@ async def supersede_thought(
     new_text = (new_text or "").strip()
     if not new_text:
         return {"ok": False, "error": "empty new_text"}
+    # Must stay on on_near_duplicate="store": corrected text is routinely >=0.95
+    # similar to the (still-active) thought it replaces — skip mode would make
+    # every supersede a no-op.
     saved = await service.capture(
         text=new_text, source=source or "supersede", origin_tool=origin_tool,
     )
@@ -211,6 +220,7 @@ async def http_capture(request: Request) -> JSONResponse:
         people=body.get("people"), topics=body.get("topics"),
         event_date=body.get("event_date"),
         skip_extraction=bool(body.get("skip_extraction", False)),
+        on_near_duplicate=body.get("on_near_duplicate", "store"),
     )
     return JSONResponse(result)
 
