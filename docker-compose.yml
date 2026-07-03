@@ -14,6 +14,8 @@ services:
       EXTRACT_MODEL: qwen3:4b
       EMBED_DIM: "2560"
       ENABLE_EXTRACTION: "true"
+      NEAR_DUP_THRESHOLD: "0.95"
+      REVIEW_DUP_THRESHOLD: "0.90"
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8000"
     extra_hosts:
@@ -34,6 +36,8 @@ services:
       EXTRACT_MODEL: qwen3:4b
       EMBED_DIM: "2560"
       ENABLE_EXTRACTION: "true"
+      NEAR_DUP_THRESHOLD: "0.95"
+      REVIEW_DUP_THRESHOLD: "0.90"
       MCP_HOST: 0.0.0.0
       MCP_PORT: "8000"
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

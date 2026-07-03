@@ -157,6 +157,57 @@ async def list_recent(*, days=7, limit=100, person=None, type=None) -> list[dict
     return [_row_to_dict(r) for r in rows]
 
 
+async def find_duplicate_pairs(*, threshold: float, per_thought: int = 5,
+                               limit: int = 50) -> list[dict]:
+    """Pairs of active thoughts with cosine similarity >= ``threshold``.
+
+    One HNSW probe per active thought (LATERAL top-k nearest active neighbours),
+    deduped into unordered pairs via least/greatest ids. Similarity is symmetric,
+    so a pair truncated out of one member's top-k still surfaces from the other
+    member's probe — per_thought=5 is effectively exhaustive at >=0.90 on a
+    personal-scale store. Each pair is oriented older/newer by created_at.
+    """
+    pool = await get_pool()
+    rows = await pool.fetch(
+        """
+        select id_a, id_b, text_a, text_b, created_a, created_b, similarity
+        from (
+            select distinct on (pair_lo, pair_hi)
+                   a.id as id_a, b.id as id_b, a.text as text_a, b.text as text_b,
+                   a.created_at as created_a, b.created_at as created_b,
+                   b.similarity,
+                   least(a.id, b.id) as pair_lo, greatest(a.id, b.id) as pair_hi
+            from thoughts a
+            cross join lateral (
+                select t.id, t.text, t.created_at,
+                       1 - (t.embedding <=> a.embedding) as similarity
+                from thoughts t
+                where t.status = 'active' and t.id <> a.id
+                order by t.embedding <=> a.embedding
+                limit $2
+            ) b
+            where a.status = 'active' and b.similarity >= $1
+            order by pair_lo, pair_hi
+        ) d
+        order by similarity desc
+        limit $3
+        """,
+        threshold, per_thought, limit,
+    )
+    pairs = []
+    for r in rows:
+        older, newer = (("a", "b") if r["created_a"] <= r["created_b"]
+                        else ("b", "a"))
+        pairs.append({
+            "older": {"id": str(r[f"id_{older}"]), "text": r[f"text_{older}"],
+                      "created_at": r[f"created_{older}"].isoformat()},
+            "newer": {"id": str(r[f"id_{newer}"]), "text": r[f"text_{newer}"],
+                      "created_at": r[f"created_{newer}"].isoformat()},
+            "similarity": round(float(r["similarity"]), 4),
+        })
+    return pairs
+
+
 async def supersede(old_id: str, new_id: str) -> None:
     """Deterministically retire ``old_id`` in favour of ``new_id`` (history kept)."""
     pool = await get_pool()

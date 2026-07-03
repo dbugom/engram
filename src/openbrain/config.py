@@ -37,6 +37,11 @@ EMBED_QUERY_INSTRUCTION = os.environ.get(
 # near-duplicate of something already stored.
 NEAR_DUP_THRESHOLD = float(os.environ.get("NEAR_DUP_THRESHOLD", "0.95"))
 
+# Similarity threshold for the weekly duplicate-review tool. Deliberately below
+# NEAR_DUP_THRESHOLD so it surfaces "should probably consolidate" pairs, not
+# just the ones the capture-time skip would have blocked.
+REVIEW_DUP_THRESHOLD = float(os.environ.get("REVIEW_DUP_THRESHOLD", "0.90"))
+
 # --- HTTP transport ----------------------------------------------------------
 MCP_HOST = os.environ.get("MCP_HOST", "127.0.0.1")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))

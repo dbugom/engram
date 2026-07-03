@@ -7,7 +7,7 @@ cosine search -> cleanup. Run inside the container:
 """
 import asyncio
 
-from . import config, db
+from . import config, db, service
 from .embed import embed_text
 from .extract import extract_metadata
 
@@ -47,8 +47,63 @@ async def main() -> None:
     found = any(r["id"] == row["id"] for r in results)
     await db.hard_delete(row["id"])
     print(f"[5] cleanup OK            retrieved_canary={found}")
+
+    # --- Noise-control checks (service layer) --------------------------------
+    created: list[str] = []
+    noise_ok = False
+    try:
+        base = await service.capture(
+            text=STORE_TEXT, source="selftest", origin_tool="selftest",
+            skip_extraction=True,
+        )
+        created.append(base["id"])
+        # "!" defeats the content hash (normalization keeps punctuation) while
+        # cosine similarity stays ~0.99 — exercises the semantic path.
+        skipped = await service.capture(
+            text=STORE_TEXT + "!", source="selftest", origin_tool="selftest",
+            skip_extraction=True, on_near_duplicate="skip",
+        )
+        skip_ok = (skipped.get("skipped") is True
+                   and skipped.get("existing_id") == base["id"])
+        if not skip_ok and skipped.get("id"):
+            created.append(skipped["id"])
+        print(f"[6] near-dup skip OK      skipped={skipped.get('skipped')} "
+              f"sim={skipped.get('similarity')}")
+
+        tagged = await service.capture(
+            text="Selftest canary two: the roadmap review moved to Thursday.",
+            source="selftest", origin_tool="selftest", skip_extraction=True,
+            metadata={"importance": 4},
+        )
+        created.append(tagged["id"])
+        pool = await db.get_pool()
+        imp = await pool.fetchval(
+            "select metadata->>'importance' from thoughts where id=$1::uuid",
+            tagged["id"],
+        )
+        meta_ok = imp == "4"
+        print(f"[7] metadata OK           importance={imp}")
+
+        near_dup_for_pair = await service.capture(
+            text=STORE_TEXT + " Kickoff is next week.", source="selftest",
+            origin_tool="selftest", skip_extraction=True,
+        )
+        created.append(near_dup_for_pair["id"])
+        pairs = await db.find_duplicate_pairs(threshold=0.9)
+        pair_ids = {p["older"]["id"] for p in pairs} | {p["newer"]["id"] for p in pairs}
+        pairs_ok = base["id"] in pair_ids and near_dup_for_pair["id"] in pair_ids
+        print(f"[8] duplicate pairs OK    found={len(pairs)} seeded_pair={pairs_ok}")
+
+        noise_ok = skip_ok and meta_ok and pairs_ok
+    finally:
+        for tid in created:
+            await db.hard_delete(tid)
+        print(f"[9] cleanup OK            removed={len(created)}")
+
     print("-" * 60)
-    print("SELFTEST PASSED" if found else "SELFTEST FAILED (stored but not retrieved)")
+    ok = found and noise_ok
+    print("SELFTEST PASSED" if ok else "SELFTEST FAILED "
+          f"(retrieved={found}, noise_control={noise_ok})")
 
 
 if __name__ == "__main__":

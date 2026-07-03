@@ -113,6 +113,7 @@ Only your Google account/org can complete the consent, so the brain stays privat
 | Save a thought | *"**Save to my Open Brain**: I decided to store vectors as halfvec because pgvector can't HNSW-index above 2000 dims."* |
 | Ask your brain | *"**Search my Open Brain** — what did I decide about the launch date?"* / *"What do I know about Rachel?"* |
 | Weekly review | *"Run my **Open Brain weekly review** — list the last 7 days and summarize themes, open items, and anything that changed."* |
+| Find duplicates | *"Run **review_duplicates** on my Open Brain and help me consolidate each pair."* |
 | Correct a fact | *"That's outdated — **supersede** that Open Brain thought with: 'The launch moved to April 2.'"* |
 | Clean up | *"**Forget** that Open Brain thought."* / *"**brain_stats** — how big is my brain?"* |
 
@@ -147,8 +148,13 @@ so provenance is stored.
 - **A fact changed → supersede** (don't add a contradiction): *"Supersede thought `<id>`
   with: 'Now uses Postgres instead of SQLite.'"* Keeps history, marks the old one superseded.
 - **Remove noise → forget**: *"Forget thought `<id>`."* (archived, not deleted).
-- **Monthly hygiene**: *"Search my brain for near-duplicates about `<topic>` to merge,"*
-  and *"brain_stats."* Exact re-captures are auto-deduped; near-dupes are flagged.
+- **Weekly duplicate sweep**: *"Run **review_duplicates**."* It lists pairs of
+  highly similar active thoughts (default ≥ 0.90 cosine), oriented older/newer.
+  For each pair keep one — usually supersede the older with a merged statement,
+  or forget the redundant one — then re-run until the list is empty.
+- **Monthly hygiene**: *"brain_stats"* for totals and type drift. Exact
+  re-captures are auto-deduped; manual near-dupes (≥ 0.95) get a warning;
+  auto-capture skips them outright.
 
 ---
 
@@ -188,9 +194,18 @@ docker exec supabase_db_openbrain psql -U postgres -d postgres -c \
 **Auto-capture** (Claude Code Stop hook, local): after each response a detached
 worker asks Qwen3-4B for 0–3 durable facts and saves any it finds — no "save this"
 needed. Tagged `source="auto-capture"`.
+
+Noise control (all decisions visible in the audit log):
+- Each fact is rated **importance 1–5** (1 = trivial … 5 = critical); anything
+  below `OPENBRAIN_MIN_IMPORTANCE` (default **3**, host env var) is dropped —
+  log shows `[dropped imp=2]`, saves show `[saved imp=4]`. The rating is stored
+  in `thoughts.metadata` (query with `metadata->>'importance'`).
+- Facts ≥ 0.95 cosine-similar to something already stored are **skipped**, not
+  saved — log shows `[skip-near-dup sim=0.97 existing=<id>]`.
 ```bash
-tail -f ~/.openbrain/auto-capture.log        # audit what it saved
+tail -f ~/.openbrain/auto-capture.log        # audit what it saved/dropped/skipped
 touch ~/.openbrain/disable_autocapture       # pause (rm to resume)
+export OPENBRAIN_MIN_IMPORTANCE=4            # stricter (in your shell profile)
 ```
 ```sql
 delete from thoughts where source = 'auto-capture';   -- undo everything it auto-saved
